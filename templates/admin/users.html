@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block title %}User Management - DLD Greenlist Updater{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h1><i class="fas fa-users-cog text-warning"></i> User Management</h1>
+                <nav aria-label="breadcrumb">
+                    <ol class="breadcrumb">
+                        <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Home</a></li>
+                        <li class="breadcrumb-item"><a href="{{ url_for('admin_panel') }}">Admin</a></li>
+                        <li class="breadcrumb-item active">Users</li>
+                    </ol>
+                </nav>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filter Tabs -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <ul class="nav nav-tabs">
+                <li class="nav-item">
+                    <a class="nav-link {% if status == 'all' %}active{% endif %}" 
+                       href="{{ url_for('admin_users', status='all') }}">
+                        <i class="fas fa-users"></i> All Users
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if status == 'pending' %}active{% endif %}" 
+                       href="{{ url_for('admin_users', status='pending') }}">
+                        <i class="fas fa-clock text-warning"></i> Pending Approval
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if status == 'approved' %}active{% endif %}" 
+                       href="{{ url_for('admin_users', status='approved') }}">
+                        <i class="fas fa-check-circle text-success"></i> Approved
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if status == 'admin' %}active{% endif %}" 
+                       href="{{ url_for('admin_users', status='admin') }}">
+                        <i class="fas fa-user-shield text-primary"></i> Administrators
+                    </a>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Users Table -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-light">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-list"></i> 
+                        {% if status == 'all' %}All Users{% elif status == 'pending' %}Pending Users{% elif status == 'approved' %}Approved Users{% elif status == 'admin' %}Administrators{% endif %}
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if users.items %}
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Name</th>
+                                    <th>Email</th>
+                                    <th>Status</th>
+                                    <th>Type</th>
+                                    <th>Clients</th>
+                                    <th>Registered</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for user in users.items %}
+                                <tr {% if user.id == current_user.id %}class="table-info"{% endif %}>
+                                    <td>{{ user.id }}</td>
+                                    <td>
+                                        <strong>{{ user.name }}</strong>
+                                        {% if user.id == current_user.id %}
+                                            <span class="badge bg-info ms-1">You</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ user.email }}</td>
+                                    <td>
+                                        {% if user.is_approved %}
+                                            <span class="badge bg-success">
+                                                <i class="fas fa-check"></i> Approved
+                                            </span>
+                                        {% else %}
+                                            <span class="badge bg-warning">
+                                                <i class="fas fa-clock"></i> Pending
+                                            </span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if user.is_admin %}
+                                            <span class="badge bg-primary">
+                                                <i class="fas fa-crown"></i> Admin
+                                            </span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">
+                                                <i class="fas fa-user"></i> User
+                                            </span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-info">{{ user.clients|length }}</span>
+                                    </td>
+                                    <td>
+                                        <small>{{ user.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
+                                    </td>
+                                    <td>
+                                        {% if user.id != current_user.id %}
+                                        <div class="btn-group btn-group-sm" role="group">
+                                            <!-- Approval Actions -->
+                                            {% if not user.is_approved %}
+                                                <a href="{{ url_for('approve_user', user_id=user.id) }}" 
+                                                   class="btn btn-success btn-sm" title="Approve User">
+                                                    <i class="fas fa-check"></i>
+                                                </a>
+                                            {% else %}
+                                                <a href="{{ url_for('reject_user', user_id=user.id) }}" 
+                                                   class="btn btn-warning btn-sm" title="Revoke Approval">
+                                                    <i class="fas fa-times"></i>
+                                                </a>
+                                            {% endif %}
+
+                                            <!-- Admin Actions -->
+                                            {% if not user.is_admin %}
+                                                <a href="{{ url_for('make_admin', user_id=user.id) }}" 
+                                                   class="btn btn-primary btn-sm" title="Make Admin"
+                                                   onclick="return confirm('Make {{ user.name }} an administrator?')">
+                                                    <i class="fas fa-user-shield"></i>
+                                                </a>
+                                            {% else %}
+                                                <a href="{{ url_for('remove_admin', user_id=user.id) }}" 
+                                                   class="btn btn-outline-primary btn-sm" title="Remove Admin"
+                                                   onclick="return confirm('Remove admin privileges from {{ user.name }}?')">
+                                                    <i class="fas fa-user-minus"></i>
+                                                </a>
+                                            {% endif %}
+
+                                            <!-- Delete Action -->
+                                            <button type="button" class="btn btn-danger btn-sm" 
+                                                    data-bs-toggle="modal" 
+                                                    data-bs-target="#deleteUserModal{{ user.id }}"
+                                                    title="Delete User">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+
+                                        <!-- Delete Confirmation Modal -->
+                                        <div class="modal fade" id="deleteUserModal{{ user.id }}" tabindex="-1">
+                                            <div class="modal-dialog">
+                                                <div class="modal-content">
+                                                    <div class="modal-header bg-danger text-white">
+                                                        <h5 class="modal-title">
+                                                            <i class="fas fa-exclamation-triangle"></i> Delete User Account
+                                                        </h5>
+                                                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                                                    </div>
+                                                    <div class="modal-body">
+                                                        <p><strong>Are you sure you want to delete this user account?</strong></p>
+                                                        <div class="alert alert-warning">
+                                                            <strong>User:</strong> {{ user.name }} ({{ user.email }})<br>
+                                                            <strong>Clients:</strong> {{ user.clients|length }} records<br>
+                                                            <strong>Warning:</strong> This action cannot be undone. All client data will be permanently deleted.
+                                                        </div>
+                                                    </div>
+                                                    <div class="modal-footer">
+                                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                        <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}" style="display: inline;">
+                                                            <button type="submit" class="btn btn-danger">
+                                                                <i class="fas fa-trash"></i> Delete Permanently
+                                                            </button>
+                                                        </form>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {% else %}
+                                        <span class="text-muted"><small>Your Account</small></span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Pagination -->
+                    {% if users.pages > 1 %}
+                    <nav aria-label="User pagination">
+                        <ul class="pagination justify-content-center">
+                            {% if users.has_prev %}
+                                <li class="page-item">
+                                    <a class="page-link" href="{{ url_for('admin_users', page=users.prev_num, status=status) }}">Previous</a>
+                                </li>
+                            {% endif %}
+                            
+                            {% for page_num in users.iter_pages() %}
+                                {% if page_num %}
+                                    {% if page_num != users.page %}
+                                        <li class="page-item">
+                                            <a class="page-link" href="{{ url_for('admin_users', page=page_num, status=status) }}">{{ page_num }}</a>
+                                        </li>
+                                    {% else %}
+                                        <li class="page-item active">
+                                            <span class="page-link">{{ page_num }}</span>
+                                        </li>
+                                    {% endif %}
+                                {% else %}
+                                    <li class="page-item disabled">
+                                        <span class="page-link">…</span>
+                                    </li>
+                                {% endif %}
+                            {% endfor %}
+                            
+                            {% if users.has_next %}
+                                <li class="page-item">
+                                    <a class="page-link" href="{{ url_for('admin_users', page=users.next_num, status=status) }}">Next</a>
+                                </li>
+                            {% endif %}
+                        </ul>
+                    </nav>
+                    {% endif %}
+
+                    {% else %}
+                    <div class="text-center py-5">
+                        <i class="fas fa-users fa-4x text-muted mb-3"></i>
+                        <h4 class="text-muted">No users found</h4>
+                        {% if status == 'pending' %}
+                            <p class="text-muted">No users are currently pending approval.</p>
+                        {% elif status == 'admin' %}
+                            <p class="text-muted">No administrators found.</p>
+                        {% else %}
+                            <p class="text-muted">No users match the current filter.</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -97,6 +97,8 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(128))
     name = db.Column(db.String(100), nullable=False)
+    is_admin = db.Column(db.Boolean, default=False)
+    is_approved = db.Column(db.Boolean, default=True)  # For admin approval workflow
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     clients = db.relationship('Client', backref='user', lazy=True, cascade='all, delete-orphan')
 
@@ -105,6 +107,29 @@ class User(UserMixin, db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+# Admin Settings model for system configuration
+class AdminSettings(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    setting_name = db.Column(db.String(50), unique=True, nullable=False)
+    setting_value = db.Column(db.String(200), nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    @staticmethod
+    def get_setting(name, default_value=''):
+        setting = AdminSettings.query.filter_by(setting_name=name).first()
+        return setting.setting_value if setting else default_value
+
+    @staticmethod
+    def set_setting(name, value):
+        setting = AdminSettings.query.filter_by(setting_name=name).first()
+        if setting:
+            setting.setting_value = value
+            setting.updated_at = datetime.utcnow()
+        else:
+            setting = AdminSettings(setting_name=name, setting_value=value)
+            db.session.add(setting)
+        db.session.commit()
 
 # Client model (renamed from Broker)
 class Client(db.Model):
@@ -270,6 +295,11 @@ def login():
     if form.validate_on_submit():
         user = User.query.filter_by(email=form.email.data).first()
         if user and user.check_password(form.password.data):
+            # Check if user is approved
+            if not user.is_approved:
+                flash('Your account is pending admin approval. Please wait for approval.', 'warning')
+                return render_template('login.html', title='Sign In', form=form)
+            
             login_user(user)
             next_page = request.args.get('next')
             if not next_page or url_parse(next_page).netloc != '':
@@ -283,13 +313,41 @@ def register():
     if current_user.is_authenticated:
         return redirect(url_for('index'))
     
+    # Check if registration is enabled
+    registration_enabled = AdminSettings.get_setting('registration_enabled', 'true') == 'true'
+    if not registration_enabled:
+        flash('Registration is currently disabled. Please contact an administrator.', 'error')
+        return redirect(url_for('login'))
+    
     form = RegistrationForm()
     if form.validate_on_submit():
-        user = User(name=form.name.data, email=form.email.data)
+        # Check if this is the first user (will be admin)
+        user_count = User.query.count()
+        is_first_user = user_count == 0
+        
+        # Check if admin approval is required
+        requires_approval = AdminSettings.get_setting('require_admin_approval', 'false') == 'true'
+        
+        user = User(
+            name=form.name.data, 
+            email=form.email.data,
+            is_admin=is_first_user,  # First user becomes admin
+            is_approved=is_first_user or not requires_approval  # First user or no approval required
+        )
         user.set_password(form.password.data)
         db.session.add(user)
         db.session.commit()
-        flash('Congratulations, you are now registered!', 'success')
+        
+        if is_first_user:
+            # Initialize default admin settings
+            AdminSettings.set_setting('registration_enabled', 'true')
+            AdminSettings.set_setting('require_admin_approval', 'false')
+            flash('Congratulations! You are now registered as the system administrator!', 'success')
+        elif requires_approval:
+            flash('Registration successful! Your account is pending admin approval.', 'info')
+        else:
+            flash('Congratulations, you are now registered!', 'success')
+        
         return redirect(url_for('login'))
     return render_template('register.html', title='Register', form=form)
 
@@ -614,6 +672,156 @@ def export_json():
 
 # Import fix for url_parse
 from urllib.parse import urlparse as url_parse
+
+# Admin routes
+def admin_required(f):
+    """Decorator to require admin access"""
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.is_admin:
+            flash('Admin access required.', 'error')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    decorated_function.__name__ = f.__name__
+    return decorated_function
+
+@app.route('/admin')
+@login_required
+@admin_required
+def admin_panel():
+    """Admin dashboard"""
+    total_users = User.query.count()
+    pending_users = User.query.filter_by(is_approved=False).count()
+    admin_users = User.query.filter_by(is_admin=True).count()
+    
+    # Get system settings
+    registration_enabled = AdminSettings.get_setting('registration_enabled', 'true') == 'true'
+    require_approval = AdminSettings.get_setting('require_admin_approval', 'false') == 'true'
+    
+    recent_users = User.query.order_by(User.created_at.desc()).limit(10).all()
+    
+    return render_template('admin/dashboard.html',
+                         total_users=total_users,
+                         pending_users=pending_users,
+                         admin_users=admin_users,
+                         registration_enabled=registration_enabled,
+                         require_approval=require_approval,
+                         recent_users=recent_users)
+
+@app.route('/admin/users')
+@login_required
+@admin_required
+def admin_users():
+    """Manage users"""
+    page = request.args.get('page', 1, type=int)
+    status = request.args.get('status', 'all')
+    
+    query = User.query
+    
+    if status == 'pending':
+        query = query.filter_by(is_approved=False)
+    elif status == 'approved':
+        query = query.filter_by(is_approved=True)
+    elif status == 'admin':
+        query = query.filter_by(is_admin=True)
+    
+    users = query.order_by(User.created_at.desc()).paginate(
+        page=page, per_page=20, error_out=False
+    )
+    
+    return render_template('admin/users.html', users=users, status=status)
+
+@app.route('/admin/settings', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def admin_settings():
+    """Admin settings"""
+    if request.method == 'POST':
+        # Update registration settings
+        registration_enabled = 'registration_enabled' in request.form
+        require_approval = 'require_admin_approval' in request.form
+        
+        AdminSettings.set_setting('registration_enabled', 'true' if registration_enabled else 'false')
+        AdminSettings.set_setting('require_admin_approval', 'true' if require_approval else 'false')
+        
+        flash('Settings updated successfully!', 'success')
+        return redirect(url_for('admin_settings'))
+    
+    # Get current settings
+    registration_enabled = AdminSettings.get_setting('registration_enabled', 'true') == 'true'
+    require_approval = AdminSettings.get_setting('require_admin_approval', 'false') == 'true'
+    
+    return render_template('admin/settings.html',
+                         registration_enabled=registration_enabled,
+                         require_approval=require_approval)
+
+@app.route('/admin/approve-user/<int:user_id>')
+@login_required
+@admin_required
+def approve_user(user_id):
+    """Approve a user"""
+    user = User.query.get_or_404(user_id)
+    if user.id == current_user.id:
+        flash('You cannot modify your own approval status.', 'error')
+    else:
+        user.is_approved = True
+        db.session.commit()
+        flash(f'User {user.name} has been approved.', 'success')
+    return redirect(url_for('admin_users'))
+
+@app.route('/admin/reject-user/<int:user_id>')
+@login_required
+@admin_required
+def reject_user(user_id):
+    """Reject/unapprove a user"""
+    user = User.query.get_or_404(user_id)
+    if user.id == current_user.id:
+        flash('You cannot modify your own approval status.', 'error')
+    else:
+        user.is_approved = False
+        db.session.commit()
+        flash(f'User {user.name} has been rejected.', 'warning')
+    return redirect(url_for('admin_users'))
+
+@app.route('/admin/make-admin/<int:user_id>')
+@login_required
+@admin_required
+def make_admin(user_id):
+    """Make a user admin"""
+    user = User.query.get_or_404(user_id)
+    user.is_admin = True
+    user.is_approved = True  # Admins are automatically approved
+    db.session.commit()
+    flash(f'User {user.name} is now an administrator.', 'success')
+    return redirect(url_for('admin_users'))
+
+@app.route('/admin/remove-admin/<int:user_id>')
+@login_required
+@admin_required
+def remove_admin(user_id):
+    """Remove admin privileges"""
+    user = User.query.get_or_404(user_id)
+    if user.id == current_user.id:
+        flash('You cannot remove your own admin privileges.', 'error')
+    else:
+        user.is_admin = False
+        db.session.commit()
+        flash(f'Admin privileges removed from {user.name}.', 'warning')
+    return redirect(url_for('admin_users'))
+
+@app.route('/admin/delete-user/<int:user_id>', methods=['POST'])
+@login_required
+@admin_required
+def delete_user(user_id):
+    """Delete a user account"""
+    user = User.query.get_or_404(user_id)
+    if user.id == current_user.id:
+        flash('You cannot delete your own account.', 'error')
+    else:
+        user_name = user.name
+        db.session.delete(user)
+        db.session.commit()
+        flash(f'User account {user_name} has been deleted.', 'success')
+    return redirect(url_for('admin_users'))
 
 if __name__ == '__main__':
     with app.app_context():

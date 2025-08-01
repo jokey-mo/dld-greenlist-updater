@@ -109,6 +109,7 @@ uploads/
 logs/
 *.html
 !templates/*.html
+!templates/**/*.html
 
 # OS specific
 .DS_Store
